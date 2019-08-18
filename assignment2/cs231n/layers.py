@@ -209,7 +209,6 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         out = normalized_x * gamma + beta
         
         cache = {}
-        cache['sample_mean'] = sample_mean
         cache['sample_sigma'] = sample_sigma
         cache['normalized_x'] = normalized_x
         cache['meanshifted_x'] = meanshifted_x
@@ -319,10 +318,13 @@ def batchnorm_backward_alt(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
+    normalized_x = cache['normalized_x']
     dbeta = np.sum(dout, axis=0)
-    dgamma = np.sum(cache['normalized_x']*dout, axis=0)
+    dgamma = np.sum(normalized_x*dout, axis=0)
     dx_gamma = dout*cache['gamma']
-    
+    dsigma = normalized_x * np.mean(dx_gamma*normalized_x, axis=0)
+    dmean = np.mean(dx_gamma, axis=0)
+    dx = (dx_gamma - dmean - dsigma)/cache['sample_sigma']
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -367,8 +369,21 @@ def layernorm_forward(x, gamma, beta, ln_param):
     # the batch norm code and leave it almost unchanged?                      #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    
+    x = x.T  
+    sample_mean = np.mean(x, axis=0)
+    sample_var = np.var(x, axis=0)
+    sample_sigma = np.sqrt(sample_var + eps)
 
-    pass
+    meanshifted_x = (x - sample_mean)
+    normalized_x = meanshifted_x/(sample_sigma)
+    out = normalized_x.T * gamma + beta
+
+    cache = {}
+    cache['sample_sigma'] = sample_sigma
+    cache['normalized_x'] = normalized_x
+    cache['meanshifted_x'] = meanshifted_x
+    cache['gamma'] = gamma
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -402,8 +417,15 @@ def layernorm_backward(dout, cache):
     # still apply!                                                            #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    pass
+    
+    normalized_x = cache['normalized_x']
+    dbeta = np.sum(dout, axis=0)
+    dgamma = np.sum(normalized_x.T*dout, axis=0)
+    dx_gamma = (dout*cache['gamma']).T
+    dsigma = normalized_x * np.mean(dx_gamma*normalized_x, axis=0)
+    dmean = np.mean(dx_gamma, axis=0)
+    dx = (dx_gamma - dmean - dsigma)/cache['sample_sigma']
+    dx = dx.T
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -737,9 +759,9 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
     N, C, H, W = x.shape
-    gamma_rep, beta_rep = np.repeat(gamma, (H*W)), np.repeat(beta, (H*W))
-    out, cache = batchnorm_forward(np.reshape(x,(N,-1)), gamma_rep, beta_rep, bn_param)
-    out = np.reshape(out,(N, C, H, W))
+    spatial_x = np.moveaxis(x, 1, -1).reshape(N*H*W, C)
+    out, cache = batchnorm_forward(spatial_x, gamma, beta, bn_param)
+    out = np.moveaxis(out.reshape((N, H, W, C)), -1, 1)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -773,7 +795,10 @@ def spatial_batchnorm_backward(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = dout.shape
+    spatial_dout = np.moveaxis(dout, 1, -1).reshape(N*H*W, C)
+    dx, dgamma, dbeta = batchnorm_backward_alt(spatial_dout, cache)
+    dx = np.moveaxis(dx.reshape((N, H, W, C)), -1, 1)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -813,7 +838,24 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = x.shape
+    assert C % G == 0, 'C and G are not compatible'
+    gnorm_split = (N*G, (C//G)*H*W)
+    x = np.reshape(x, gnorm_split).T
+    sample_mean = np.mean(x, axis=0)
+    sample_var = np.var(x, axis=0)
+    sample_sigma = np.sqrt(sample_var + eps)
+
+    meanshifted_x = (x - sample_mean)
+    normalized_x = meanshifted_x/(sample_sigma)
+    res_normx = np.reshape(normalized_x.T, (N, C, H, W))
+    out = res_normx * gamma.reshape(1, C, 1, 1) + beta.reshape(1, C, 1, 1)
+
+    cache = {}
+    cache['sample_sigma'] = sample_sigma
+    cache['normalized_x'] = normalized_x
+    cache['gamma'] = gamma
+    cache['gnorm_split'] = gnorm_split
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -843,7 +885,18 @@ def spatial_groupnorm_backward(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = dout.shape
+    normalized_x = cache['normalized_x']
+    gnorm_split = cache['gnorm_split']
+    gamma = cache['gamma'].reshape(1, C, 1, 1)
+    dbeta = np.sum(dout, axis=(0,2,3), keepdims=True)
+    dgamma = np.reshape(normalized_x.T , (N, C, H, W))*dout
+    dgamma = np.sum(dgamma, axis=(0,2,3), keepdims=True)
+    dx_gamma = np.reshape((dout*gamma), gnorm_split).T
+    dsigma = normalized_x * np.mean(dx_gamma*normalized_x, axis=0)
+    dmean = np.mean(dx_gamma, axis=0)
+    dx = (dx_gamma - dmean - dsigma)/cache['sample_sigma']
+    dx = np.reshape(dx.T, (N, C, H, W))
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################

@@ -194,6 +194,10 @@ class FullyConnectedNet(object):
         for lnum, odim in enumerate(out_dims):
             self.params['W'+str(lnum+1)] = np.random.randn(idim,odim)*weight_scale
             self.params['b'+str(lnum+1)] = np.zeros(odim)
+            if self.normalization == 'batchnorm':
+                if lnum < len(out_dims)-1:
+                    self.params['gamma'+str(lnum+1)] = np.ones(odim)
+                    self.params['beta'+str(lnum+1)] = np.zeros(odim)
             idim = odim
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -260,9 +264,15 @@ class FullyConnectedNet(object):
         cache = {}
         H = X
         for l in range(1,self.num_layers):
-            W = self.params['W'+str(l)] 
-            b = self.params['b'+str(l)]
-            H, cache['layer'+str(l)] = affine_relu_forward(H, W, b)
+            W, b = self.params['W'+str(l)], self.params['b'+str(l)]
+            if self.normalization=='batchnorm':
+                bn_param = self.bn_params[l-1]
+                gamma, beta = self.params['gamma'+str(l)], self.params['beta'+str(l)]
+                a, cache['affine'+str(l)] = affine_forward(H, W, b)
+                bn, cache['bnorm'+str(l)] = batchnorm_forward(a, gamma, beta, bn_param)
+                H, cache['relu'+str(l)] = relu_forward(bn)
+            else:    
+                H, cache['layer'+str(l)] = affine_relu_forward(H, W, b)
             if self.use_dropout:
                 H, cache['dropout'+str(l)] = dropout_forward(H, self.dropout_param)
         W = self.params['W'+str(self.num_layers)]
@@ -306,8 +316,16 @@ class FullyConnectedNet(object):
             bname = 'b'+str(l)
             if self.use_dropout:
                 dupstream = dropout_backward(dupstream, cache['dropout'+str(l)])
-            lcache = cache['layer'+str(l)]
-            dupstream, grads[Wname], grads[bname] = affine_relu_backward(dupstream, lcache)
+            if self.normalization=='batchnorm':
+                gname = 'gamma' + str(l)
+                btname = 'beta' + str(l)
+                dupstream = relu_backward(dupstream, cache['relu'+str(l)])
+                dupstream, grads[gname], grads[btname] = batchnorm_backward_alt(dupstream, 
+                                                                                cache['bnorm'+str(l)])
+                dupstream, grads[Wname], grads[bname] = affine_backward(dupstream, cache['affine'+str(l)])
+            else:
+                lcache = cache['layer'+str(l)]
+                dupstream, grads[Wname], grads[bname] = affine_relu_backward(dupstream, lcache)
             loss += 0.5*self.reg*np.sum(self.params[Wname]**2)
             grads[Wname] += self.reg*self.params[Wname]
 
