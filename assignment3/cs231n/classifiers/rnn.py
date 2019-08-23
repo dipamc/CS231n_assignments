@@ -142,14 +142,18 @@ class CaptioningRNN(object):
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
+        if self.cell_type == 'rnn':
+            recurrent_forward, recurrent_backward = rnn_forward, rnn_backward
+        else:
+            recurrent_forward, recurrent_backward = lstm_forward, lstm_backward
         cache = {}
         emb_in, cache['embedding'] = word_embedding_forward(captions_in, W_embed)
         h0, cache['proj'] = affine_forward(features, W_proj, b_proj)
-        h, cache['rnn'] = rnn_forward(emb_in, h0, Wx, Wh, b)
+        h, cache['recurrent'] = recurrent_forward(emb_in, h0, Wx, Wh, b)
         scores, cache['vocab'] = temporal_affine_forward(h, W_vocab, b_vocab)
         loss, dloss = temporal_softmax_loss(scores, captions_out, mask)
         dscores, grads['W_vocab'], grads['b_vocab'] = temporal_affine_backward(dloss, cache['vocab'])
-        demb, dh0, grads['Wx'], grads['Wh'], grads['b'] = rnn_backward(dscores, cache['rnn'])
+        demb, dh0, grads['Wx'], grads['Wh'], grads['b'] = recurrent_backward(dscores, cache['recurrent'])
         _, grads['W_proj'], grads['b_proj'] = affine_backward(dh0, cache['proj'])
         grads['W_embed'] = word_embedding_backward(demb, cache['embedding'])
 
@@ -222,9 +226,16 @@ class CaptioningRNN(object):
         
         emb, _ = word_embedding_forward(self._start, W_embed)
         h, _ = affine_forward(features, W_proj, b_proj)
+        c = np.zeros((N, b.shape[0]//4)) # will be used only for lstm so b shape will be 4H
         for t in range(max_length):
-            h, _ = rnn_step_forward(emb, h, Wx, Wh, b)
-            captions[:, t] = np.argmax(h)
+            if self.cell_type == 'rnn':
+                h, _ = rnn_step_forward(emb, h, Wx, Wh, b)
+            else:
+                h, c, _ = lstm_step_forward(emb, h, c, Wx, Wh, b)
+            scores, _ = affine_forward(h, W_vocab, b_vocab)
+            nextword = np.argmax(scores, axis=1)
+            captions[:, t] = nextword
+            emb, _ = word_embedding_forward(nextword ,W_embed)
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
